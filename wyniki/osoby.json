@@ -1,0 +1,20 @@
+[
+    {
+        "imie": "Anna",
+        "nazwisko": "Kowalska",
+        "miasto": "Opole",
+        "uwagi": "lubię kawę"
+    },
+    {
+        "imie": "Jan",
+        "nazwisko": "Nowak",
+        "miasto": "Wrocław",
+        "uwagi": ""
+    },
+    {
+        "imie": "Łukasz",
+        "nazwisko": "Zieliński",
+        "miasto": "Kraków",
+        "uwagi": "żółć gęślą jaźń"
+    }
+]
