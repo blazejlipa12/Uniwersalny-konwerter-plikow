@@ -4,7 +4,10 @@ import json
 import shutil
 import subprocess
 import tempfile
+import tkinter as tk
+
 from pathlib import Path
+from tkinter import ttk, filedialog, messagebox
 
 
 # --------------------------------------------------
@@ -14,17 +17,15 @@ from pathlib import Path
 def znajdz_libreoffice():
     """Sprawdza, czy LibreOffice jest zainstalowany."""
 
-    # Sprawdzenie, czy LibreOffice znajduje się w PATH
     program = shutil.which("soffice")
 
     if program:
         return program
 
-    # Typowe lokalizacje LibreOffice w Windows
     mozliwe_sciezki = [
         Path("C:/Program Files/LibreOffice/program/soffice.exe"),
         Path("C:/Program Files (x86)/LibreOffice/program/soffice.exe")
-    ]   
+    ]
 
     for sciezka in mozliwe_sciezki:
         if sciezka.is_file():
@@ -181,7 +182,6 @@ def dokument_na_pdf(plik_wejsciowy, katalog_wyjsciowy):
 
     katalog_wyjsciowy.mkdir(parents=True, exist_ok=True)
 
-    # Tymczasowy katalog zapobiega nadpisywaniu plików
     with tempfile.TemporaryDirectory() as katalog_tymczasowy:
 
         polecenie = [
@@ -199,7 +199,6 @@ def dokument_na_pdf(plik_wejsciowy, katalog_wyjsciowy):
             timeout=120
         )
 
-        # Sprawdzenie kodu zakończenia LibreOffice
         if wynik.returncode != 0:
             komunikat = wynik.stderr.strip() or wynik.stdout.strip()
             raise RuntimeError(
@@ -215,7 +214,6 @@ def dokument_na_pdf(plik_wejsciowy, katalog_wyjsciowy):
                 "LibreOffice nie utworzył oczekiwanego pliku PDF."
             )
 
-        # Bezpieczna nazwa pliku wynikowego
         sciezka_wynikowa = bezpieczna_sciezka(
             katalog_wyjsciowy,
             plik_wejsciowy.stem + ".pdf"
@@ -227,54 +225,138 @@ def dokument_na_pdf(plik_wejsciowy, katalog_wyjsciowy):
 
 
 # --------------------------------------------------
-# MENU GŁÓWNE
+# DOSTĘPNE KONWERTERY
 # --------------------------------------------------
 
-def main():
-    print("===================================")
-    print("     UNIWERSALNY KONWERTER PLIKÓW")
-    print("===================================")
+KONWERTERY = {
+    ".csv": {
+        "JSON": csv_na_json
+    },
+    ".json": {
+        "CSV": json_na_csv
+    },
+    ".docx": {
+        "PDF": dokument_na_pdf
+    },
+    ".odt": {
+        "PDF": dokument_na_pdf
+    }
+}
 
-    print("1. CSV -> JSON")
-    print("2. JSON -> CSV")
-    print("3. DOCX -> PDF")
-    print("4. ODT -> PDF")
-    print("0. Zakończ")
 
-    wybor = input("\nWybierz opcję: ").strip()
+# --------------------------------------------------
+# FUNKCJE INTERFEJSU GRAFICZNEGO
+# --------------------------------------------------
 
-    if wybor == "0":
-        print("Zakończono program.")
-        return
+def wybierz_plik():
+    """Otwiera okno wyboru pliku."""
 
-    if wybor == "1":
-        funkcja = csv_na_json
+    plik = filedialog.askopenfilename(
+        title="Wybierz plik do konwersji",
+        filetypes=[
+            ("Obsługiwane pliki", "*.csv *.json *.docx *.odt"),
+            ("Pliki CSV", "*.csv"),
+            ("Pliki JSON", "*.json"),
+            ("Pliki DOCX", "*.docx"),
+            ("Pliki ODT", "*.odt"),
+            ("Wszystkie pliki", "*.*")
+        ]
+    )
 
-    elif wybor == "2":
-        funkcja = json_na_csv
+    if plik:
+        plik_wejsciowy.set(plik)
+        aktualizuj_formaty()
 
-    elif wybor == "3":
-        funkcja = dokument_na_pdf
 
-    elif wybor == "4":
-        funkcja = dokument_na_pdf
+def wybierz_katalog():
+    """Otwiera okno wyboru katalogu wynikowego."""
 
+    katalog = filedialog.askdirectory(
+        title="Wybierz katalog zapisu"
+    )
+
+    if katalog:
+        katalog_wyjsciowy.set(katalog)
+        aktualizuj_przycisk()
+
+
+def aktualizuj_formaty():
+    """Ustawia formaty docelowe zależnie od rozszerzenia pliku."""
+
+    plik = plik_wejsciowy.get()
+
+    if not plik:
+        dostepne_formaty = []
     else:
-        print("Niepoprawna opcja.")
+        rozszerzenie = Path(plik).suffix.lower()
+        dostepne_formaty = list(
+            KONWERTERY.get(rozszerzenie, {}).keys()
+        )
+
+    wybor_formatu["values"] = dostepne_formaty
+    format_docelowy.set("")
+
+    if dostepne_formaty:
+        wybor_formatu.current(0)
+        status.set("Wybrano plik. Można rozpocząć konwersję.")
+    else:
+        status.set("Nieobsługiwany format pliku.")
+
+    aktualizuj_przycisk()
+
+
+def aktualizuj_przycisk(*args):
+    """Sprawdza, czy można uruchomić konwersję."""
+
+    if (
+        plik_wejsciowy.get()
+        and katalog_wyjsciowy.get()
+        and format_docelowy.get()
+    ):
+        przycisk_konwersji.config(state="normal")
+    else:
+        przycisk_konwersji.config(state="disabled")
+
+
+def wykonaj_konwersje():
+    """Uruchamia wybraną konwersję."""
+
+    plik = plik_wejsciowy.get()
+    katalog = katalog_wyjsciowy.get()
+    format_doc = format_docelowy.get()
+
+    if not plik or not katalog or not format_doc:
+        messagebox.showwarning(
+            "Brak danych",
+            "Wybierz plik, katalog i format docelowy."
+        )
         return
 
-    plik = input("Podaj ścieżkę do pliku wejściowego: ").strip()
-    plik = plik.strip('"')
+    rozszerzenie = Path(plik).suffix.lower()
 
-    katalog = input(
-        "Podaj ścieżkę do katalogu wynikowego: "
-    ).strip()
-    katalog = katalog.strip('"')
+    konwertery = KONWERTERY.get(rozszerzenie, {})
+    funkcja = konwertery.get(format_doc)
+
+    if funkcja is None:
+        messagebox.showerror(
+            "Błąd",
+            "Wybrana para formatów nie jest obsługiwana."
+        )
+        return
 
     try:
+        status.set("Trwa konwersja...")
+        okno.update_idletasks()
+
         wynik = funkcja(plik, katalog)
-        print("\nKonwersja zakończona pomyślnie!")
-        print(f"Plik wynikowy: {wynik}")
+
+        status.set("Konwersja zakończona pomyślnie!")
+
+        messagebox.showinfo(
+            "Sukces",
+            f"Konwersja zakończona pomyślnie!\n\n"
+            f"Plik wynikowy:\n{wynik}"
+        )
 
     except (
         OSError,
@@ -283,8 +365,126 @@ def main():
         TypeError,
         subprocess.TimeoutExpired
     ) as blad:
-        print(f"\nWystąpił błąd: {blad}")
+
+        status.set("Wystąpił błąd podczas konwersji.")
+
+        messagebox.showerror(
+            "Błąd konwersji",
+            str(blad)
+        )
 
 
-if __name__ == "__main__":
-    main()
+# --------------------------------------------------
+# TWORZENIE OKNA PROGRAMU
+# --------------------------------------------------
+
+okno = tk.Tk()
+okno.title("Uniwersalny konwerter plików")
+okno.geometry("650x440")
+okno.minsize(550, 400)
+
+# Zmienne przechowujące wybory użytkownika
+plik_wejsciowy = tk.StringVar()
+katalog_wyjsciowy = tk.StringVar()
+format_docelowy = tk.StringVar()
+status = tk.StringVar(value="Oczekiwanie na wybór pliku...")
+
+# Główny kontener
+ramka = ttk.Frame(okno, padding=25)
+ramka.pack(fill="both", expand=True)
+
+# Tytuł
+tytul = ttk.Label(
+    ramka,
+    text="UNIWERSALNY KONWERTER PLIKÓW",
+    font=("Arial", 18, "bold")
+)
+tytul.pack(pady=(5, 25))
+
+# Wybór pliku
+etykieta_pliku = ttk.Label(
+    ramka,
+    text="Plik wejściowy:"
+)
+etykieta_pliku.pack(anchor="w")
+
+ramka_pliku = ttk.Frame(ramka)
+ramka_pliku.pack(fill="x", pady=(5, 20))
+
+pole_pliku = ttk.Entry(
+    ramka_pliku,
+    textvariable=plik_wejsciowy,
+    state="readonly"
+)
+pole_pliku.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+przycisk_pliku = ttk.Button(
+    ramka_pliku,
+    text="Przeglądaj",
+    command=wybierz_plik
+)
+przycisk_pliku.pack(side="right")
+
+# Wybór katalogu
+etykieta_katalogu = ttk.Label(
+    ramka,
+    text="Katalog wyjściowy:"
+)
+etykieta_katalogu.pack(anchor="w")
+
+ramka_katalogu = ttk.Frame(ramka)
+ramka_katalogu.pack(fill="x", pady=(5, 20))
+
+pole_katalogu = ttk.Entry(
+    ramka_katalogu,
+    textvariable=katalog_wyjsciowy,
+    state="readonly"
+)
+pole_katalogu.pack(side="left", fill="x", expand=True, padx=(0, 10))
+
+przycisk_katalogu = ttk.Button(
+    ramka_katalogu,
+    text="Wybierz katalog",
+    command=wybierz_katalog
+)
+przycisk_katalogu.pack(side="right")
+
+# Wybór formatu
+etykieta_formatu = ttk.Label(
+    ramka,
+    text="Format docelowy:"
+)
+etykieta_formatu.pack(anchor="w")
+
+wybor_formatu = ttk.Combobox(
+    ramka,
+    textvariable=format_docelowy,
+    state="readonly"
+)
+wybor_formatu.pack(fill="x", pady=(5, 25))
+
+# Przycisk konwersji
+przycisk_konwersji = ttk.Button(
+    ramka,
+    text="KONWERTUJ PLIK",
+    command=wykonaj_konwersje,
+    state="disabled"
+)
+przycisk_konwersji.pack(fill="x", ipady=8)
+
+# Status programu
+etykieta_statusu = ttk.Label(
+    ramka,
+    textvariable=status,
+    wraplength=580
+)
+etykieta_statusu.pack(pady=(25, 5))
+
+# Reagowanie na zmianę wyboru formatu
+format_docelowy.trace_add(
+    "write",
+    aktualizuj_przycisk
+)
+
+# Uruchomienie programu
+okno.mainloop()
