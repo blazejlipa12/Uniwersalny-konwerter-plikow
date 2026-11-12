@@ -62,7 +62,9 @@ Uniwersalny-konwerter-plikow/
 ├── dane_wejsciowe/
 ├── wyniki/
 ├── main.py
-└── README.md
+├── raport_Z_testow.md
+├── README.md
+└── requirements.txt
 ```
 
 ## Technologie

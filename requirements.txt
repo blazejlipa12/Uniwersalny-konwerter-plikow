@@ -1,0 +1,5 @@
+# Projekt korzysta wyłącznie z bibliotek standardowych Pythona.
+# Nie są wymagane dodatkowe pakiety instalowane przez pip.
+#
+# Wymaganie zewnętrzne:
+# LibreOffice – wymagany do konwersji DOCX, ODT i TXT.
