@@ -4,412 +4,591 @@ import json
 import shutil
 import subprocess
 import tempfile
+import threading
 import tkinter as tk
 
 from pathlib import Path
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 
-# --------------------------------------------------
-# WYSZUKIWANIE LIBREOFFICE
-# --------------------------------------------------
+# ============================================================
+# FUNKCJE POMOCNICZE
+# ============================================================
+
+def bezpieczna_sciezka(katalog, nazwa_pliku):
+    """
+    Sprawdza, czy plik o podanej nazwie już istnieje.
+    Jeśli tak, dodaje kolejny numer, np. wynik_1.pdf.
+    Dzięki temu nie nadpisujemy istniejących plików.
+    """
+    sciezka = Path(katalog) / nazwa_pliku
+
+    if not sciezka.exists():
+        return sciezka
+
+    nazwa = sciezka.stem
+    rozszerzenie = sciezka.suffix
+    licznik = 1
+
+    while True:
+        nowa_sciezka = Path(katalog) / f"{nazwa}_{licznik}{rozszerzenie}"
+
+        if not nowa_sciezka.exists():
+            return nowa_sciezka
+
+        licznik += 1
+
 
 def znajdz_libreoffice():
-    """Sprawdza, czy LibreOffice jest zainstalowany."""
-
+    """
+    Szuka programu LibreOffice potrzebnego do konwersji dokumentów.
+    """
     program = shutil.which("soffice")
 
     if program:
         return program
 
+    # Typowe lokalizacje LibreOffice w systemie Windows
     mozliwe_sciezki = [
-        Path("C:/Program Files/LibreOffice/program/soffice.exe"),
-        Path("C:/Program Files (x86)/LibreOffice/program/soffice.exe")
+        "C:/Program Files/LibreOffice/program/soffice.exe",
+        "C:/Program Files (x86)/LibreOffice/program/soffice.exe"
     ]
 
     for sciezka in mozliwe_sciezki:
-        if sciezka.is_file():
-            return str(sciezka)
+        if Path(sciezka).exists():
+            return sciezka
 
-    return None
-
-
-# --------------------------------------------------
-# OBSŁUGA PLIKÓW
-# --------------------------------------------------
-
-def bezpieczna_sciezka(katalog, nazwa):
-    """Tworzy ścieżkę wynikową, nie nadpisując istniejących plików."""
-
-    katalog = Path(katalog)
-    katalog.mkdir(parents=True, exist_ok=True)
-
-    sciezka = katalog / nazwa
-
-    if not sciezka.exists():
-        return sciezka
-
-    numer = 1
-    rozszerzenie = sciezka.suffix
-    nazwa_pliku = sciezka.stem
-
-    while True:
-        nowa_nazwa = f"{nazwa_pliku}_{numer}{rozszerzenie}"
-        nowa_sciezka = katalog / nowa_nazwa
-
-        if not nowa_sciezka.exists():
-            return nowa_sciezka
-
-        numer += 1
-
-
-# --------------------------------------------------
-# CSV -> JSON
-# --------------------------------------------------
-
-def csv_na_json(plik_wejsciowy, katalog_wyjsciowy):
-    """Konwertuje plik CSV do JSON."""
-
-    plik_wejsciowy = Path(plik_wejsciowy)
-
-    if not plik_wejsciowy.is_file():
-        raise FileNotFoundError("Nie znaleziono pliku wejściowego.")
-
-    if plik_wejsciowy.suffix.lower() != ".csv":
-        raise ValueError("Plik wejściowy musi mieć rozszerzenie CSV.")
-
-    with plik_wejsciowy.open(
-        "r", encoding="utf-8-sig", newline=""
-    ) as plik:
-        reader = csv.DictReader(plik)
-
-        if not reader.fieldnames:
-            raise ValueError("Plik CSV nie zawiera nagłówków.")
-
-        dane = list(reader)
-
-    sciezka_wynikowa = bezpieczna_sciezka(
-        katalog_wyjsciowy,
-        plik_wejsciowy.stem + ".json"
+    raise FileNotFoundError(
+        "Nie znaleziono LibreOffice. Zainstaluj program "
+        "lub sprawdź jego lokalizację."
     )
 
-    with sciezka_wynikowa.open("w", encoding="utf-8") as plik:
-        json.dump(dane, plik, ensure_ascii=False, indent=4)
 
-    return sciezka_wynikowa
+def sprawdz_dane_wejsciowe(plik_wejsciowy, katalog_wyjsciowy):
+    """
+    Sprawdza, czy plik wejściowy i katalog wyjściowy istnieją.
+    """
+    plik = Path(plik_wejsciowy)
+    katalog = Path(katalog_wyjsciowy)
+
+    if not plik.exists():
+        raise FileNotFoundError("Wybrany plik wejściowy nie istnieje.")
+
+    if not plik.is_file():
+        raise ValueError("Wybrana ścieżka nie wskazuje na plik.")
+
+    if not katalog.exists():
+        raise FileNotFoundError("Wybrany katalog wyjściowy nie istnieje.")
+
+    if not katalog.is_dir():
+        raise ValueError("Wybrana ścieżka wyjściowa nie jest katalogiem.")
+
+    return plik, katalog
 
 
-# --------------------------------------------------
-# JSON -> CSV
-# --------------------------------------------------
+# ============================================================
+# GRUPA A - KONWERSJA CSV <-> JSON
+# ============================================================
+
+def csv_na_json(plik_wejsciowy, katalog_wyjsciowy):
+    """
+    Zamienia plik CSV na JSON.
+    """
+    plik, katalog = sprawdz_dane_wejsciowe(
+        plik_wejsciowy, katalog_wyjsciowy
+    )
+
+    if plik.suffix.lower() != ".csv":
+        raise ValueError("Plik wejściowy musi mieć rozszerzenie CSV.")
+
+    try:
+        with open(plik, "r", encoding="utf-8-sig", newline="") as plik_csv:
+            czytnik = csv.DictReader(plik_csv)
+
+            if not czytnik.fieldnames:
+                raise ValueError("Plik CSV nie zawiera nagłówków kolumn.")
+
+            if any(not naglowek for naglowek in czytnik.fieldnames):
+                raise ValueError("Plik CSV zawiera pusty nagłówek kolumny.")
+
+            dane = list(czytnik)
+
+            if not dane:
+                raise ValueError("Plik CSV nie zawiera żadnych danych.")
+
+            if any(None in rekord for rekord in dane):
+                raise ValueError(
+                    "Niektóre wiersze CSV zawierają więcej wartości "
+                    "niż nagłówków."
+                )
+
+    except UnicodeDecodeError:
+        raise ValueError("Nie udało się odczytać pliku CSV.")
+
+    sciezka_wyjsciowa = bezpieczna_sciezka(
+        katalog, plik.stem + ".json"
+    )
+
+    with open(sciezka_wyjsciowa, "w", encoding="utf-8") as plik_json:
+        json.dump(dane, plik_json, ensure_ascii=False, indent=4)
+
+    return sciezka_wyjsciowa
+
 
 def json_na_csv(plik_wejsciowy, katalog_wyjsciowy):
-    """Konwertuje plik JSON do CSV."""
+    """
+    Zamienia plik JSON na CSV.
+    """
+    plik, katalog = sprawdz_dane_wejsciowe(
+        plik_wejsciowy, katalog_wyjsciowy
+    )
 
-    plik_wejsciowy = Path(plik_wejsciowy)
-
-    if not plik_wejsciowy.is_file():
-        raise FileNotFoundError("Nie znaleziono pliku wejściowego.")
-
-    if plik_wejsciowy.suffix.lower() != ".json":
+    if plik.suffix.lower() != ".json":
         raise ValueError("Plik wejściowy musi mieć rozszerzenie JSON.")
 
     try:
-        with plik_wejsciowy.open("r", encoding="utf-8-sig") as plik:
-            dane = json.load(plik)
+        with open(plik, "r", encoding="utf-8-sig") as plik_json:
+            dane = json.load(plik_json)
+
     except json.JSONDecodeError as blad:
         raise ValueError(
-            f"Niepoprawny JSON. Linia: {blad.lineno}, "
-            f"kolumna: {blad.colno}."
+            f"Niepoprawny plik JSON. Błąd w linii {blad.lineno}, "
+            f"kolumna {blad.colno}."
         )
 
-    if not isinstance(dane, list) or not dane:
+    except UnicodeDecodeError:
+        raise ValueError("Nie udało się odczytać pliku JSON.")
+
+    if not isinstance(dane, list) or len(dane) == 0:
         raise ValueError("JSON musi zawierać niepustą listę obiektów.")
 
-    if not all(isinstance(element, dict) for element in dane):
-        raise ValueError("Każdy element JSON musi być obiektem.")
+    if not all(isinstance(rekord, dict) for rekord in dane):
+        raise ValueError("Każdy element listy JSON musi być obiektem.")
 
     naglowki = list(dane[0].keys())
 
     if not naglowki:
-        raise ValueError("Obiekty JSON muszą zawierać pola.")
+        raise ValueError("Obiekty JSON nie zawierają żadnych pól.")
 
-    for element in dane:
-        if list(element.keys()) != naglowki:
+    for rekord in dane:
+        if list(rekord.keys()) != naglowki:
             raise ValueError(
-                "Wszystkie obiekty JSON muszą mieć takie same pola "
+                "Wszystkie obiekty JSON muszą zawierać te same pola "
                 "w tej samej kolejności."
             )
 
-    sciezka_wynikowa = bezpieczna_sciezka(
-        katalog_wyjsciowy,
-        plik_wejsciowy.stem + ".csv"
+    sciezka_wyjsciowa = bezpieczna_sciezka(
+        katalog, plik.stem + ".csv"
     )
 
-    with sciezka_wynikowa.open(
-        "w", encoding="utf-8-sig", newline=""
-    ) as plik:
-        writer = csv.DictWriter(plik, fieldnames=naglowki)
-        writer.writeheader()
-        writer.writerows(dane)
+    with open(
+        sciezka_wyjsciowa,
+        "w",
+        encoding="utf-8-sig",
+        newline=""
+    ) as plik_csv:
 
-    return sciezka_wynikowa
+        zapis = csv.DictWriter(plik_csv, fieldnames=naglowki)
+        zapis.writeheader()
+        zapis.writerows(dane)
+
+    return sciezka_wyjsciowa
 
 
-# --------------------------------------------------
-# DOCX / ODT -> PDF
-# --------------------------------------------------
+# ============================================================
+# GRUPA B I C - KONWERSJE DOKUMENTÓW
+# ============================================================
 
 def dokument_na_pdf(plik_wejsciowy, katalog_wyjsciowy):
-    """Konwertuje dokument DOCX lub ODT do PDF za pomocą LibreOffice."""
+    """
+    Zamienia dokument DOCX lub ODT na PDF przy użyciu LibreOffice.
+    """
+    plik, katalog = sprawdz_dane_wejsciowe(
+        plik_wejsciowy, katalog_wyjsciowy
+    )
 
-    plik_wejsciowy = Path(plik_wejsciowy)
-    katalog_wyjsciowy = Path(katalog_wyjsciowy)
+    if plik.suffix.lower() not in [".docx", ".odt"]:
+        raise ValueError("Obsługiwane formaty wejściowe to DOCX i ODT.")
 
-    if not plik_wejsciowy.is_file():
-        raise FileNotFoundError("Nie znaleziono pliku wejściowego.")
+    return konwertuj_libreoffice(plik, katalog, "pdf")
 
-    if plik_wejsciowy.suffix.lower() not in [".docx", ".odt"]:
-        raise ValueError("Obsługiwane są tylko pliki DOCX i ODT.")
 
+def tekst_na_format(plik_wejsciowy, katalog_wyjsciowy, format_docelowy):
+    """
+    Zamienia plik TXT na wybrany format: PDF lub ODT.
+    """
+    plik, katalog = sprawdz_dane_wejsciowe(
+        plik_wejsciowy, katalog_wyjsciowy
+    )
+
+    if plik.suffix.lower() != ".txt":
+        raise ValueError("Plik wejściowy musi mieć rozszerzenie TXT.")
+
+    if format_docelowy not in ["pdf", "odt"]:
+        raise ValueError("Nieobsługiwany format docelowy.")
+
+    return konwertuj_libreoffice(plik, katalog, format_docelowy)
+
+
+def konwertuj_libreoffice(plik, katalog, format_docelowy):
+    """
+    Wspólna funkcja konwertująca dokumenty za pomocą LibreOffice.
+    """
     libreoffice = znajdz_libreoffice()
 
-    if not libreoffice:
-        raise FileNotFoundError(
-            "Nie znaleziono LibreOffice. Zainstaluj program "
-            "lub dodaj jego katalog do zmiennej PATH."
-        )
-
-    katalog_wyjsciowy.mkdir(parents=True, exist_ok=True)
-
+    # Tworzymy tymczasowy katalog na wynik konwersji
     with tempfile.TemporaryDirectory() as katalog_tymczasowy:
 
         polecenie = [
             libreoffice,
             "--headless",
-            "--convert-to", "pdf",
-            "--outdir", katalog_tymczasowy,
-            str(plik_wejsciowy)
+            "--convert-to",
+            format_docelowy,
+            "--outdir",
+            katalog_tymczasowy,
+            str(plik)
         ]
 
-        wynik = subprocess.run(
-            polecenie,
-            capture_output=True,
-            text=True,
-            timeout=120
-        )
+        try:
+            wynik = subprocess.run(
+                polecenie,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+        except subprocess.TimeoutExpired:
+            raise TimeoutError(
+                "Konwersja przekroczyła limit czasu 120 sekund."
+            )
+
+        except OSError as blad:
+            raise RuntimeError(
+                f"Nie udało się uruchomić LibreOffice: {blad}"
+            )
 
         if wynik.returncode != 0:
-            komunikat = wynik.stderr.strip() or wynik.stdout.strip()
+            szczegoly = wynik.stderr.strip() or wynik.stdout.strip()
+
             raise RuntimeError(
-                komunikat or "Konwersja dokumentu nie powiodła się."
+                "LibreOffice nie mógł przekonwertować dokumentu.\n"
+                + szczegoly
             )
 
-        plik_pdf = Path(katalog_tymczasowy) / (
-            plik_wejsciowy.stem + ".pdf"
+        plik_wynikowy = (
+            Path(katalog_tymczasowy) /
+            f"{plik.stem}.{format_docelowy}"
         )
 
-        if not plik_pdf.is_file():
+        if not plik_wynikowy.exists():
             raise RuntimeError(
-                "LibreOffice nie utworzył oczekiwanego pliku PDF."
+                "LibreOffice nie utworzył pliku wynikowego."
             )
 
-        sciezka_wynikowa = bezpieczna_sciezka(
-            katalog_wyjsciowy,
-            plik_wejsciowy.stem + ".pdf"
+        # Tworzymy bezpieczną nazwę pliku wynikowego
+        sciezka_docelowa = bezpieczna_sciezka(
+            katalog, plik.stem + "." + format_docelowy
         )
 
-        shutil.move(str(plik_pdf), str(sciezka_wynikowa))
+        shutil.move(str(plik_wynikowy), str(sciezka_docelowa))
 
-    return sciezka_wynikowa
+    return sciezka_docelowa
 
 
-# --------------------------------------------------
-# DOSTĘPNE KONWERTERY
-# --------------------------------------------------
+# ============================================================
+# REJESTR DOSTĘPNYCH KONWERSJI
+# ============================================================
 
 KONWERTERY = {
     ".csv": {
         "JSON": csv_na_json
     },
+
     ".json": {
         "CSV": json_na_csv
     },
+
     ".docx": {
         "PDF": dokument_na_pdf
     },
+
     ".odt": {
         "PDF": dokument_na_pdf
+    },
+
+    ".txt": {
+        "PDF": lambda plik, katalog: tekst_na_format(
+            plik, katalog, "pdf"
+        ),
+
+        "ODT": lambda plik, katalog: tekst_na_format(
+            plik, katalog, "odt"
+        )
     }
 }
 
 
-# --------------------------------------------------
-# FUNKCJE INTERFEJSU GRAFICZNEGO
-# --------------------------------------------------
+# ============================================================
+# INTERFEJS GRAFICZNY - TKINTER
+# ============================================================
+
+okno = tk.Tk()
+okno.title("Uniwersalny konwerter plików")
+okno.geometry("680x470")
+okno.minsize(580, 430)
+
+plik_wejsciowy = tk.StringVar()
+katalog_wyjsciowy = tk.StringVar()
+format_docelowy = tk.StringVar()
+status = tk.StringVar(value="Wybierz plik wejściowy, aby rozpocząć.")
+
+konwersja_w_trakcie = False
+
 
 def wybierz_plik():
-    """Otwiera okno wyboru pliku."""
-
-    plik = filedialog.askopenfilename(
+    """
+    Otwiera okno wyboru pliku wejściowego.
+    """
+    sciezka = filedialog.askopenfilename(
         title="Wybierz plik do konwersji",
         filetypes=[
-            ("Obsługiwane pliki", "*.csv *.json *.docx *.odt"),
+            ("Obsługiwane pliki", "*.csv *.json *.docx *.odt *.txt"),
             ("Pliki CSV", "*.csv"),
             ("Pliki JSON", "*.json"),
-            ("Pliki DOCX", "*.docx"),
-            ("Pliki ODT", "*.odt"),
+            ("Dokumenty Word", "*.docx"),
+            ("Dokumenty OpenDocument", "*.odt"),
+            ("Pliki tekstowe", "*.txt"),
             ("Wszystkie pliki", "*.*")
         ]
     )
 
-    if plik:
-        plik_wejsciowy.set(plik)
+    if sciezka:
+        plik_wejsciowy.set(sciezka)
         aktualizuj_formaty()
 
 
 def wybierz_katalog():
-    """Otwiera okno wyboru katalogu wynikowego."""
-
-    katalog = filedialog.askdirectory(
-        title="Wybierz katalog zapisu"
+    """
+    Otwiera okno wyboru katalogu wyjściowego.
+    """
+    sciezka = filedialog.askdirectory(
+        title="Wybierz katalog wyjściowy"
     )
 
-    if katalog:
-        katalog_wyjsciowy.set(katalog)
+    if sciezka:
+        katalog_wyjsciowy.set(sciezka)
         aktualizuj_przycisk()
 
 
-def aktualizuj_formaty():
-    """Ustawia formaty docelowe zależnie od rozszerzenia pliku."""
+def aktualizuj_formaty(*args):
+    """
+    Aktualizuje listę formatów docelowych na podstawie pliku wejściowego.
+    """
+    sciezka = plik_wejsciowy.get()
 
-    plik = plik_wejsciowy.get()
+    if not sciezka:
+        lista_formatow["values"] = []
+        format_docelowy.set("")
+        aktualizuj_przycisk()
+        return
 
-    if not plik:
-        dostepne_formaty = []
+    rozszerzenie = Path(sciezka).suffix.lower()
+
+    dostepne_formaty = KONWERTERY.get(rozszerzenie, {})
+
+    formaty = list(dostepne_formaty.keys())
+
+    lista_formatow["values"] = formaty
+
+    if formaty:
+        format_docelowy.set(formaty[0])
+        status.set("Wybierz katalog wyjściowy.")
     else:
-        rozszerzenie = Path(plik).suffix.lower()
-        dostepne_formaty = list(
-            KONWERTERY.get(rozszerzenie, {}).keys()
-        )
-
-    wybor_formatu["values"] = dostepne_formaty
-    format_docelowy.set("")
-
-    if dostepne_formaty:
-        wybor_formatu.current(0)
-        status.set("Wybrano plik. Można rozpocząć konwersję.")
-    else:
-        status.set("Nieobsługiwany format pliku.")
+        format_docelowy.set("")
+        status.set("Ten format pliku nie jest obsługiwany.")
 
     aktualizuj_przycisk()
 
 
 def aktualizuj_przycisk(*args):
-    """Sprawdza, czy można uruchomić konwersję."""
-
+    """
+    Sprawdza, czy użytkownik uzupełnił wymagane pola.
+    """
     if (
         plik_wejsciowy.get()
         and katalog_wyjsciowy.get()
         and format_docelowy.get()
+        and not konwersja_w_trakcie
     ):
-        przycisk_konwersji.config(state="normal")
+        przycisk_konwertuj.config(state="normal")
     else:
-        przycisk_konwersji.config(state="disabled")
+        przycisk_konwertuj.config(state="disabled")
+
+
+def zakoncz_konwersje(sciezka_wynikowa):
+    """
+    Wyświetla komunikat po poprawnym zakończeniu konwersji.
+    Funkcja jest wywoływana w głównym wątku GUI.
+    """
+    global konwersja_w_trakcie
+
+    konwersja_w_trakcie = False
+    przycisk_konwertuj.config(text="Konwertuj")
+    aktualizuj_przycisk()
+
+    status.set("Konwersja zakończona pomyślnie.")
+
+    messagebox.showinfo(
+        "Sukces",
+        f"Plik został przekonwertowany.\n\n"
+        f"Zapisano jako:\n{sciezka_wynikowa}"
+    )
+
+
+def blad_konwersji(komunikat):
+    """
+    Wyświetla komunikat o błędzie.
+    Funkcja jest wywoływana w głównym wątku GUI.
+    """
+    global konwersja_w_trakcie
+
+    konwersja_w_trakcie = False
+    przycisk_konwertuj.config(text="Konwertuj")
+    aktualizuj_przycisk()
+
+    status.set("Wystąpił błąd podczas konwersji.")
+
+    messagebox.showerror(
+        "Błąd konwersji",
+        komunikat
+    )
 
 
 def wykonaj_konwersje():
-    """Uruchamia wybraną konwersję."""
+    """
+    Uruchamia konwersję w osobnym wątku, aby GUI nie przestawało odpowiadać.
+    """
+    global konwersja_w_trakcie
 
-    plik = plik_wejsciowy.get()
-    katalog = katalog_wyjsciowy.get()
-    format_doc = format_docelowy.get()
+    if konwersja_w_trakcie:
+        return
 
-    if not plik or not katalog or not format_doc:
+    sciezka_pliku = plik_wejsciowy.get()
+    sciezka_katalogu = katalog_wyjsciowy.get()
+    wybrany_format = format_docelowy.get()
+
+    if not sciezka_pliku or not sciezka_katalogu or not wybrany_format:
         messagebox.showwarning(
             "Brak danych",
-            "Wybierz plik, katalog i format docelowy."
+            "Wybierz plik, katalog wyjściowy i format docelowy."
         )
         return
 
-    rozszerzenie = Path(plik).suffix.lower()
+    rozszerzenie = Path(sciezka_pliku).suffix.lower()
 
-    konwertery = KONWERTERY.get(rozszerzenie, {})
-    funkcja = konwertery.get(format_doc)
+    dostepne_formaty = KONWERTERY.get(rozszerzenie, {})
+
+    funkcja = dostepne_formaty.get(wybrany_format)
 
     if funkcja is None:
         messagebox.showerror(
             "Błąd",
-            "Wybrana para formatów nie jest obsługiwana."
+            "Wybrana konwersja nie jest obsługiwana."
         )
         return
 
-    try:
-        status.set("Trwa konwersja...")
-        okno.update_idletasks()
+    # Sprawdzamy, czy plik wynikowy już istnieje.
+    # Jeśli tak, pytamy użytkownika o utworzenie kolejnej kopii.
+    rozszerzenie_wyjsciowe = "." + wybrany_format.lower()
 
-        wynik = funkcja(plik, katalog)
+    nazwa_wynikowa = (
+        Path(sciezka_pliku).stem + rozszerzenie_wyjsciowe
+    )
 
-        status.set("Konwersja zakończona pomyślnie!")
+    przewidywana_sciezka = (
+        Path(sciezka_katalogu) / nazwa_wynikowa
+    )
 
-        messagebox.showinfo(
-            "Sukces",
-            f"Konwersja zakończona pomyślnie!\n\n"
-            f"Plik wynikowy:\n{wynik}"
+    if przewidywana_sciezka.exists():
+        decyzja = messagebox.askyesno(
+            "Plik już istnieje",
+            "Plik o takiej nazwie już istnieje.\n\n"
+            "Czy chcesz utworzyć kolejną kopię z numerem "
+            "zamiast nadpisywać istniejący plik?"
         )
 
-    except (
-        OSError,
-        ValueError,
-        RuntimeError,
-        TypeError,
-        subprocess.TimeoutExpired
-    ) as blad:
+        if not decyzja:
+            return
 
-        status.set("Wystąpił błąd podczas konwersji.")
+    konwersja_w_trakcie = True
+    przycisk_konwertuj.config(
+        state="disabled",
+        text="Konwertowanie..."
+    )
 
-        messagebox.showerror(
-            "Błąd konwersji",
-            str(blad)
-        )
+    status.set("Trwa konwersja pliku...")
+
+    # Funkcja wykonywana w osobnym wątku
+    def zadanie():
+        try:
+            wynik = funkcja(
+                sciezka_pliku,
+                sciezka_katalogu
+            )
+
+            okno.after(
+                0,
+                lambda: zakoncz_konwersje(wynik)
+            )
+
+        except Exception as blad:
+            komunikat = str(blad)
+
+            okno.after(
+                0,
+                lambda: blad_konwersji(komunikat)
+            )
+
+    watek = threading.Thread(
+        target=zadanie,
+        daemon=True
+    )
+
+    watek.start()
 
 
-# --------------------------------------------------
-# TWORZENIE OKNA PROGRAMU
-# --------------------------------------------------
+# ============================================================
+# BUDOWA INTERFEJSU
+# ============================================================
 
-okno = tk.Tk()
-okno.title("Uniwersalny konwerter plików")
-okno.geometry("650x440")
-okno.minsize(550, 400)
+glowna_ramka = ttk.Frame(okno, padding=25)
+glowna_ramka.pack(fill="both", expand=True)
 
-# Zmienne przechowujące wybory użytkownika
-plik_wejsciowy = tk.StringVar()
-katalog_wyjsciowy = tk.StringVar()
-format_docelowy = tk.StringVar()
-status = tk.StringVar(value="Oczekiwanie na wybór pliku...")
-
-# Główny kontener
-ramka = ttk.Frame(okno, padding=25)
-ramka.pack(fill="both", expand=True)
-
-# Tytuł
 tytul = ttk.Label(
-    ramka,
-    text="UNIWERSALNY KONWERTER PLIKÓW",
+    glowna_ramka,
+    text="Uniwersalny konwerter plików",
     font=("Arial", 18, "bold")
 )
-tytul.pack(pady=(5, 25))
+tytul.pack(pady=(0, 10))
 
-# Wybór pliku
+opis = ttk.Label(
+    glowna_ramka,
+    text="Wybierz plik, katalog docelowy i format konwersji.",
+    font=("Arial", 10)
+)
+opis.pack(pady=(0, 25))
+
+
+# Wybór pliku wejściowego
+
 etykieta_pliku = ttk.Label(
-    ramka,
+    glowna_ramka,
     text="Plik wejściowy:"
 )
 etykieta_pliku.pack(anchor="w")
 
-ramka_pliku = ttk.Frame(ramka)
-ramka_pliku.pack(fill="x", pady=(5, 20))
+ramka_pliku = ttk.Frame(glowna_ramka)
+ramka_pliku.pack(fill="x", pady=(5, 15))
 
 pole_pliku = ttk.Entry(
     ramka_pliku,
@@ -420,20 +599,22 @@ pole_pliku.pack(side="left", fill="x", expand=True, padx=(0, 10))
 
 przycisk_pliku = ttk.Button(
     ramka_pliku,
-    text="Przeglądaj",
+    text="Wybierz plik",
     command=wybierz_plik
 )
 przycisk_pliku.pack(side="right")
 
-# Wybór katalogu
+
+# Wybór katalogu wyjściowego
+
 etykieta_katalogu = ttk.Label(
-    ramka,
+    glowna_ramka,
     text="Katalog wyjściowy:"
 )
 etykieta_katalogu.pack(anchor="w")
 
-ramka_katalogu = ttk.Frame(ramka)
-ramka_katalogu.pack(fill="x", pady=(5, 20))
+ramka_katalogu = ttk.Frame(glowna_ramka)
+ramka_katalogu.pack(fill="x", pady=(5, 15))
 
 pole_katalogu = ttk.Entry(
     ramka_katalogu,
@@ -449,42 +630,50 @@ przycisk_katalogu = ttk.Button(
 )
 przycisk_katalogu.pack(side="right")
 
-# Wybór formatu
+
+# Wybór formatu docelowego
+
 etykieta_formatu = ttk.Label(
-    ramka,
+    glowna_ramka,
     text="Format docelowy:"
 )
 etykieta_formatu.pack(anchor="w")
 
-wybor_formatu = ttk.Combobox(
-    ramka,
+lista_formatow = ttk.Combobox(
+    glowna_ramka,
     textvariable=format_docelowy,
     state="readonly"
 )
-wybor_formatu.pack(fill="x", pady=(5, 25))
+lista_formatow.pack(fill="x", pady=(5, 20))
+
 
 # Przycisk konwersji
-przycisk_konwersji = ttk.Button(
-    ramka,
-    text="KONWERTUJ PLIK",
+
+przycisk_konwertuj = ttk.Button(
+    glowna_ramka,
+    text="Konwertuj",
     command=wykonaj_konwersje,
     state="disabled"
 )
-przycisk_konwersji.pack(fill="x", ipady=8)
+przycisk_konwertuj.pack(pady=10, ipadx=20, ipady=5)
 
-# Status programu
+
+# Informacja o aktualnym stanie aplikacji
+
 etykieta_statusu = ttk.Label(
-    ramka,
+    glowna_ramka,
     textvariable=status,
+    font=("Arial", 9),
     wraplength=580
 )
-etykieta_statusu.pack(pady=(25, 5))
+etykieta_statusu.pack(pady=15)
 
-# Reagowanie na zmianę wyboru formatu
-format_docelowy.trace_add(
-    "write",
-    aktualizuj_przycisk
-)
 
-# Uruchomienie programu
+# Reagowanie na zmianę danych
+plik_wejsciowy.trace_add("write", aktualizuj_formaty)
+katalog_wyjsciowy.trace_add("write", aktualizuj_przycisk)
+format_docelowy.trace_add("write", aktualizuj_przycisk)
+
+
+# Uruchomienie aplikacji
 okno.mainloop()
